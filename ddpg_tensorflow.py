@@ -18,7 +18,8 @@ import util
 class MnistEnvironment(object):
     def __init__(self, model):
         self.model = model
-        self.threshold = 0.99
+        self.mc = 15
+        self.threshold = 1e-3
         self._max_episode_steps = 10
         
         self.state_size = 784
@@ -44,7 +45,9 @@ class MnistEnvironment(object):
         self.sequence = 0
         self.batch_imgs = [self.prev_img] # save the rotated images 
         self.del_angles = [0] # save the rotated angle sequentially
-        self.preds = [np.max(self.model.test(np.expand_dims(self.prev_img, axis=0)), axis=1)[0]]
+        prob_set = util.all_prob(self.model, np.expand_dims(self.prev_img, axis=0), self.mc)
+        self.uncs = [util.get_mutual_informations(prob_set)[0]] # save the uncertainty
+        self.label_hats = [prob_set.sum(axis=0).argmax(axis=1)[0]] # save predicted label
 
         return self.img.flatten()
     
@@ -57,12 +60,13 @@ class MnistEnvironment(object):
 #         next_img = util.np_sharpen(next_img, sharpen_radius)
         
         # reward
-        pred_before = self.preds[-1]
-        pred_after = np.max(self.model.test(np.expand_dims(next_img, axis=0)), axis=1)[0]
-        reward = pred_after - pred_before
+        unc_before = self.uncs[-1]
+        prob_set = util.all_prob(self.model, np.expand_dims(next_img, axis=0), self.mc)
+        unc_after = util.get_mutual_informations(prob_set)[0]
+        reward = -(unc_after - unc_before)
         
         # terminal
-        if pred_after > self.threshold or self.sequence >= self._max_episode_steps:
+        if unc_after < self.threshold or self.sequence >= self._max_episode_steps:
             terminal = True
         else:
             terminal = False
@@ -72,7 +76,8 @@ class MnistEnvironment(object):
 
         # save the values
         self.del_angles.append(rotate_angle)
-        self.preds.append(pred_after)
+        self.uncs.append(unc_after)
+        self.label_hats.append(prob_set.sum(axis=0).argmax(axis=1)[0])
         self.batch_imgs.append(self.prev_img)
         
         return self.prev_img.flatten(), reward, terminal, 0
@@ -82,9 +87,10 @@ class MnistEnvironment(object):
         img_width = self.batch_imgs.shape[2]
         
         self.batch_imgs = util.make_grid(self.batch_imgs, len(self.batch_imgs), 2)
-        print(self.preds)
-        tick_labels = [f'{angle:.03f}\n{pred:.03f}'
-                       for (angle, pred) in zip(self.del_angles, self.preds)]
+        print(self.uncs)
+        tick_labels = [f'{angle:.02f}\n{unc:.04f}\n{label_hat}'
+                       for (angle, unc, label_hat) 
+                       in zip(self.del_angles, self.uncs, self.label_hats)]
         util.save_batch_fig(fname, self.batch_imgs, img_width, tick_labels)
 
 
@@ -226,7 +232,7 @@ class Agent(object):
     def __init__(self, args, sess):
         # CartPole 환경
         self.sess = sess
-        self.model = Network(sess) # mnist accurcacy model
+        self.model = Network(sess, phase='train') # mnist accurcacy model
         self.env = MnistEnvironment(self.model) 
         self.state_size = self.env.state_size
         self.action_size = self.env.action_size
@@ -346,7 +352,7 @@ if __name__ == "__main__":
     parser.add_argument('--learning_rate', default=[0.002, 0.001], type=list)
     parser.add_argument('--batch_size', default=32, type=int)
     parser.add_argument('--discount_factor', default=0.9, type=float)
-    parser.add_argument('--epochs', default=1, type=float)
+    parser.add_argument('--epochs', default=3, type=float)
     parser.add_argument('--save_dir', default='save_img', type=str)
     sys.argv = ['-f']
     args = parser.parse_args()
