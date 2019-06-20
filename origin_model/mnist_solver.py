@@ -53,11 +53,11 @@ class Network(object):
 
         self.saver = tf.train.Saver()
 
-        # load checkpoint
-        if self.checkpoint_load():
-            print(" [*] checkpoint load SUCCESS ")
-        else:
-            print(" [!] checkpoint load failed ")
+#         # load checkpoint
+#         if self.checkpoint_load():
+#             print(" [*] checkpoint load SUCCESS ")
+#         else:
+#             print(" [!] checkpoint load failed ")
 
  
     def test(self, inputs):
@@ -80,7 +80,9 @@ class Network(object):
         if ckpt and ckpt.model_checkpoint_path:
             ckpt_name = os.path.basename(ckpt.model_checkpoint_path)
             self.saver.restore(self.sess, os.path.join(self.ckpt_dir, ckpt_name))
+            print(" [*] checkpoint load SUCCESS ")
             return True
         else:
+            print(" [!] checkpoint load failed ")
             return False
         

@@ -7,6 +7,7 @@ import numpy as np
 import argparse
 import tensorflow as tf
 from collections import deque
+from copy import copy
 import sys
 import time
 from tensorflow.examples.tutorials.mnist import input_data
@@ -14,12 +15,11 @@ from tensorflow.examples.tutorials.mnist import input_data
 from origin_model.mnist_solver import Network
 import util
 
-class MnistDegradation(object):
+class MnistEnvironment(object):
     def __init__(self, model):
         self.model = model
         self.threshold = 0.99
         self._max_episode_steps = 10
-        self.sequence = 0
         
         self.state_size = 784
         self.action_size = 2
@@ -36,23 +36,28 @@ class MnistDegradation(object):
         self.test_labels = mnist.test.labels
             
     def reset(self, idx):
-        self.sequence = 0
         self.img = self.train_images[idx] # 28*28*1
-#         self.img = util.random_degrade(self.img)
+        self.img = util.random_degrade(self.img)
+        self.prev_img = copy(self.img)
+
+        self.sequence = 0
+        self.del_angle = [0] # save the rotated angle sequentially
+        self.batch_imgs = [self.prev_img] # save the rotated images 
+
         return self.img.flatten()
     
     def step(self, rotate_angle, sharpen_radius):
         # sequence
         self.sequence += 1
-        
+        self.del_angle.append(rotate_angle)
+
         # next_state
-        next_img = util.np_rotate(self.img, rotate_angle)
-        next_img = util.np_sharpen(next_img, sharpen_radius)
+        next_img = util.np_rotate(self.img, sum(self.del_angle))
+#         next_img = util.np_sharpen(next_img, sharpen_radius)
         
         # reward
-        pred_before = np.max(self.model.test(np.expand_dims(self.img, axis=0)), axis=1)
+        pred_before = np.max(self.model.test(np.expand_dims(self.prev_img, axis=0)), axis=1)
         pred_after = np.max(self.model.test(np.expand_dims(next_img, axis=0)), axis=1)
-        print(f'========pred before: {self.model.test(np.expand_dims(self.img,axis=0))}, after: {self.model.test(np.expand_dims(next_img, axis=0))}==========')
         reward = pred_after - pred_before
         
         # terminal
@@ -62,12 +67,17 @@ class MnistDegradation(object):
             terminal = False
         
         # change the current image
-        self.img = next_img
+        self.prev_img = next_img
+        self.batch_imgs.append(self.prev_img)
         
-        return self.img.flatten(), reward[0], terminal, 0
+        return self.prev_img.flatten(), reward[0], terminal, 0
         
-    def render():
-        pass
+    def render(self, fname):
+        self.batch_imgs = np.stack(self.batch_imgs)
+        img_width = self.batch_imgs.shape[2]
+        
+        self.batch_imgs = util.make_grid(self.batch_imgs, len(self.batch_imgs), 2)
+        util.save_batch_fig(fname, self.batch_imgs, img_width, self.del_angle)
 
 
 class Environment(object):
@@ -77,9 +87,8 @@ class Environment(object):
         self.action_size = action_size
         pass
 
-    def render_worker(self, render):
-        if render:
-            self.env.render()
+    def render_worker(self, fname):
+        self.env.render(fname)
         pass
 
     def new_episode(self, idx):
@@ -95,9 +104,8 @@ class Environment(object):
 
 
 class ReplayMemory(object):
-    def __init__(self, env, state_size, batch_size):
+    def __init__(self, state_size, batch_size):
         self.memory = deque(maxlen=10000)
-        self.env = env
         self.state_size = state_size
         self.batch_size = batch_size
         pass
@@ -210,8 +218,8 @@ class Agent(object):
     def __init__(self, args, sess):
         # CartPole 환경
         self.sess = sess
-        self.model = Network(sess) # pre-trained mnist model
-        self.env = MnistDegradation(self.model) 
+        self.model = Network(sess) # mnist accurcacy model
+        self.env = MnistEnvironment(self.model) 
         self.state_size = self.env.state_size
         self.action_size = self.env.action_size
         self.a_bound = self.env.a_bound
@@ -222,9 +230,18 @@ class Agent(object):
         self.discount_factor = args.discount_factor
         self.epochs = args.epochs
         self.ENV = Environment(self.env, self.state_size, self.action_size)
-        self.replay = ReplayMemory(self.env, self.state_size, self.batch_size)
+        self.replay = ReplayMemory(self.state_size, self.batch_size)
         self.ddpg = DDPG(self.state_size, self.action_size, self.sess, self.learning_rate[0], self.learning_rate[1], 
                          self.replay, self.discount_factor, self.a_bound)
+
+        self.save_dir = args.save_dir
+
+        # initialize
+        sess.run(tf.global_variables_initializer())  # tensorflow graph가 다 만들어지고 난 후에 해야됨
+
+        # load pre-trained mnist model
+        self.env.model.checkpoint_load()
+        
         self.saver = tf.train.Saver()
         self.epsilon = 1
         self.explore = 2e4
@@ -246,11 +263,10 @@ class Agent(object):
     def noise_select_action(self, state):
         action = self.sess.run(self.ddpg.actor, {self.ddpg.state: state})[0]
         noise = self.epsilon * self.ou_function(0, 0.15, 0.25)
-        #print(action, noise)
-        return np.clip(action + noise, -2, 2)
+        return action + noise
 
     def select_action(self, state):
-        return np.clip(self.sess.run(self.ddpg.actor, {self.ddpg.state: state})[0], -2, 2)
+        return self.sess.run(self.ddpg.actor, {self.ddpg.state: state})[0]
 
     def train(self):
         scores, episodes = [], []
@@ -260,10 +276,8 @@ class Agent(object):
                 score = 0
                 state = self.ENV.new_episode(idx)
                 state = np.reshape(state, [1, self.state_size])
-    
+
                 while not terminal:
-                    #self.epsilon -= 1.0/self.explore
-                    self.epsilon = max(self.epsilon, 0)
                     action = self.noise_select_action(state)
                     next_state, reward, terminal = self.ENV.act(action)
                     state = state[0]
@@ -280,7 +294,9 @@ class Agent(object):
                         scores.append(score)
                         episodes.append(e)
                         if (i+1)%10 == 0:
-                            print('epoch', e+1, 'iter:', f'{i+1:05d}', ' score:', int(score), ' last 10 mean score', int(np.mean(scores[-min(10, len(scores)):])))
+                            print('epoch', e+1, 'iter:', f'{i+1:05d}', ' score:', score, ' last 10 mean score', np.mean(scores[-min(10, len(scores)):]), f'sequence: {self.env.sequence}')
+                        if (i+1)%100 == 0:
+                            self.ENV.render_worker(os.path.join(self.save_dir, f'{(i+1):05d}.png'))
 
         pass
 
@@ -288,7 +304,6 @@ class Agent(object):
         for idx in range(self.test_size): 
             state = self.ENV.new_episode(idx)
             state = np.reshape(state, [1, self.state_size])
-            # self.ENV.render_worker(True)
     
             terminal = False
             score = 0
@@ -298,9 +313,10 @@ class Agent(object):
                 next_state = np.reshape(next_state, [1, self.state_size])
                 score += reward
                 state = next_state
-                # self.ENV.render_worker(True)
                 time.sleep(0.02)
                 if terminal:
+#                     if idx == 10:
+#                         self.ENV.render_worker(f'{i:05d}.png')
                     return score
     pass
 
@@ -316,17 +332,19 @@ class Agent(object):
 
 
 if __name__ == "__main__":
-
     print(sys.executable)
     # parameter 저장하는 parser
     parser = argparse.ArgumentParser(description="Pendulum")
-    parser.add_argument('--env_name', default='Pendulum-v0', type=str)
     parser.add_argument('--learning_rate', default=[0.002, 0.001], type=list)
     parser.add_argument('--batch_size', default=32, type=int)
     parser.add_argument('--discount_factor', default=0.9, type=float)
-    parser.add_argument('--epochs', default=20, type=float)
+    parser.add_argument('--epochs', default=1, type=float)
+    parser.add_argument('--save_dir', default='save_img', type=str)
     sys.argv = ['-f']
     args = parser.parse_args()
+
+    if not os.path.exists(args.save_dir):
+        os.makedirs(args.save_dir)
 
     config = tf.ConfigProto()
     os.environ["CUDA_VISIBLE_DEVICES"] = '1'
@@ -336,7 +354,7 @@ if __name__ == "__main__":
     # 학습 or 테스트
     with tf.Session(config=config) as sess:
         agent = Agent(args, sess)
-        sess.run(tf.global_variables_initializer())  # tensorflow graph가 다 만들어지고 난 후에 해야됨
+
         agent.train()
         agent.save()
         agent.load()
