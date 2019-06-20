@@ -13,9 +13,9 @@ from . import mnist_model
 
 class Network(object):
     
-    def __init__(self, sess):
+    def __init__(self, sess, phase='test'):
         self.sess = sess
-        self.phase = 'test' 
+        self.phase = phase 
         self.data_dir = 'MNIST_data' 
         self.ckpt_dir = 'origin_model/checkpoint'
         self.batch_size = 128

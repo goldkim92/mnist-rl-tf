@@ -60,18 +60,17 @@ def make_grid(batch, nrow=8, padding=2):
     return grid 
     
 
-def save_batch_fig(fname, batch_grid, img_width, angles):
+def save_batch_fig(fname, batch_grid, img_width, tick_labels):
     '''
     batch_grid: output of `make_grid` function
     img_width: width of original image
-    angles: list of rotated angles
+    tick_labels: x_axis tick labels
     '''
     xticks_position = np.arange(img_width//2, batch_grid.shape[1], img_width+2)
-    angles = [f'{angle:.03f}' for angle in angles]
 
     fig = plt.figure(figsize=(12,3))
     plt.imshow(batch_grid, cmap='gray')
-    plt.xticks(xticks_position, angles)
+    plt.xticks(xticks_position, tick_labels)
     plt.yticks([])
     for direction in ['bottom','left','top','right']:
         plt.gca().spines[direction].set_visible(False)

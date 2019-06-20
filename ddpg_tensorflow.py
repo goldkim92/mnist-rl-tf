@@ -40,24 +40,25 @@ class MnistEnvironment(object):
         self.img = util.random_degrade(self.img)
         self.prev_img = copy(self.img)
 
+        # initialize
         self.sequence = 0
-        self.del_angle = [0] # save the rotated angle sequentially
         self.batch_imgs = [self.prev_img] # save the rotated images 
+        self.del_angles = [0] # save the rotated angle sequentially
+        self.preds = [np.max(self.model.test(np.expand_dims(self.prev_img, axis=0)), axis=1)[0]]
 
         return self.img.flatten()
     
     def step(self, rotate_angle, sharpen_radius):
         # sequence
         self.sequence += 1
-        self.del_angle.append(rotate_angle)
 
         # next_state
-        next_img = util.np_rotate(self.img, sum(self.del_angle))
+        next_img = util.np_rotate(self.img, sum(self.del_angles))
 #         next_img = util.np_sharpen(next_img, sharpen_radius)
         
         # reward
-        pred_before = np.max(self.model.test(np.expand_dims(self.prev_img, axis=0)), axis=1)
-        pred_after = np.max(self.model.test(np.expand_dims(next_img, axis=0)), axis=1)
+        pred_before = self.preds[-1]
+        pred_after = np.max(self.model.test(np.expand_dims(next_img, axis=0)), axis=1)[0]
         reward = pred_after - pred_before
         
         # terminal
@@ -68,16 +69,23 @@ class MnistEnvironment(object):
         
         # change the current image
         self.prev_img = next_img
+
+        # save the values
+        self.del_angles.append(rotate_angle)
+        self.preds.append(pred_after)
         self.batch_imgs.append(self.prev_img)
         
-        return self.prev_img.flatten(), reward[0], terminal, 0
+        return self.prev_img.flatten(), reward, terminal, 0
         
     def render(self, fname):
         self.batch_imgs = np.stack(self.batch_imgs)
         img_width = self.batch_imgs.shape[2]
         
         self.batch_imgs = util.make_grid(self.batch_imgs, len(self.batch_imgs), 2)
-        util.save_batch_fig(fname, self.batch_imgs, img_width, self.del_angle)
+        print(self.preds)
+        tick_labels = [f'{angle:.03f}\n{pred:.03f}'
+                       for (angle, pred) in zip(self.del_angles, self.preds)]
+        util.save_batch_fig(fname, self.batch_imgs, img_width, tick_labels)
 
 
 class Environment(object):
@@ -313,7 +321,7 @@ class Agent(object):
                 next_state = np.reshape(next_state, [1, self.state_size])
                 score += reward
                 state = next_state
-                time.sleep(0.02)
+#                 time.sleep(0.02)
                 if terminal:
 #                     if idx == 10:
 #                         self.ENV.render_worker(f'{i:05d}.png')
