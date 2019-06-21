@@ -18,13 +18,13 @@ import util
 class MnistEnvironment(object):
     def __init__(self, model):
         self.model = model
-        self.mc = 15
+        self.mc = 10
         self.threshold = 5e-3
         self._max_episode_steps = 15
         
         self.state_size = 784
-        self.action_size = 2
-        self.a_bound = np.array([10,2.5])
+        self.action_size = 1
+        self.a_bound = 10
         
         self.data_load()
     
@@ -57,7 +57,7 @@ class MnistEnvironment(object):
 
         return self.img.flatten()
     
-    def step(self, rotate_angle, sharpen_radius):
+    def step(self, rotate_angle):
         # sequence
         self.sequence += 1
 
@@ -200,7 +200,7 @@ class DDPG(object):
         with tf.variable_scope(scope):
             hidden1 = tf.layers.dense(self.state, actor_hidden_size, activation=tf.nn.relu, name='l1', trainable=trainable)
             a = tf.layers.dense(hidden1, self.action_size, activation=tf.nn.tanh, name='a', trainable=trainable)
-            return a * self.action_limit + np.array([0., 2.5])
+            return a * self.action_limit
 
     def build_critic(self, scope, trainable, a):
         with tf.variable_scope(scope):
@@ -378,7 +378,7 @@ if __name__ == "__main__":
     print(sys.executable)
     # parameter 저장하는 parser
     parser = argparse.ArgumentParser(description="Pendulum")
-    parser.add_argument('--gpu_number', default='0', type=str)
+    parser.add_argument('--gpu_number', default='1', type=str)
     parser.add_argument('--learning_rate', default=[0.002, 0.001], type=list)
     parser.add_argument('--batch_size', default=128, type=int)
     parser.add_argument('--discount_factor', default=0.99, type=float)
