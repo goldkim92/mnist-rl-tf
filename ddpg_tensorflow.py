@@ -19,8 +19,8 @@ class MnistEnvironment(object):
     def __init__(self, model):
         self.model = model
         self.mc = 15
-        self.threshold = 1e-3
-        self._max_episode_steps = 10
+        self.threshold = 5e-3
+        self._max_episode_steps = 15
         
         self.state_size = 784
         self.action_size = 2
@@ -36,16 +36,22 @@ class MnistEnvironment(object):
         self.test_images = mnist.test.images.reshape([-1,28,28,1])
         self.test_labels = mnist.test.labels
             
-    def reset(self, idx):
-        self.img = self.train_images[idx] # 28*28*1
-        self.img = util.random_degrade(self.img)
-        self.prev_img = copy(self.img)
+    def reset(self, idx, phase='train'):
+        self.phase = phase
+        if self.phase == 'train':
+            self.img = self.train_images[idx] # 28*28*1
+            self.img = util.random_degrade(self.img)
+            self.label = self.train_labels[idx]
+        else: # self.phase == 'test'
+            self.img = self.test_images[idx]
+            self.img = util.random_degrade(self.img)
+            self.label = self.test_labels[idx]
 
         # initialize
         self.sequence = 0
-        self.batch_imgs = [self.prev_img] # save the rotated images 
+        self.batch_imgs = [self.img] # save the rotated images 
         self.del_angles = [0] # save the rotated angle sequentially
-        prob_set = util.all_prob(self.model, np.expand_dims(self.prev_img, axis=0), self.mc)
+        prob_set = util.all_prob(self.model, np.expand_dims(self.img, axis=0), self.mc)
         self.uncs = [util.get_mutual_informations(prob_set)[0]] # save the uncertainty
         self.label_hats = [prob_set.sum(axis=0).argmax(axis=1)[0]] # save predicted label
 
@@ -60,34 +66,41 @@ class MnistEnvironment(object):
 #         next_img = util.np_sharpen(next_img, sharpen_radius)
         
         # reward
-        unc_before = self.uncs[-1]
         prob_set = util.all_prob(self.model, np.expand_dims(next_img, axis=0), self.mc)
         unc_after = util.get_mutual_informations(prob_set)[0]
-        reward = -(unc_after - unc_before)
+        unc_before = self.uncs[-1]
+
+        reward_after = np.clip(-np.log(unc_after), a_min=None, a_max=-np.log(self.threshold))
+        reward_before = np.clip(-np.log(unc_before), a_min=None, a_max=-np.log(self.threshold))
+        reward = reward_after - reward_before
         
         # terminal
-        if unc_after < self.threshold or self.sequence >= self._max_episode_steps:
-            terminal = True
-        else:
-            terminal = False
+        if self.phase == 'train':
+            if (unc_after < self.threshold and self.label_hats[-1] == self.label) \
+               or self.sequence >= self._max_episode_steps:
+                terminal = True
+            else:
+                terminal = False
+        else: # self.phase == 'test'
+            if unc_after < self.threshold or self.sequence >= self._max_episode_steps:
+                terminal = True
+            else:
+                terminal = False
         
-        # change the current image
-        self.prev_img = next_img
-
         # save the values
         self.del_angles.append(rotate_angle)
         self.uncs.append(unc_after)
         self.label_hats.append(prob_set.sum(axis=0).argmax(axis=1)[0])
-        self.batch_imgs.append(self.prev_img)
+        self.batch_imgs.append(next_img)
         
-        return self.prev_img.flatten(), reward, terminal, 0
+        return next_img.flatten(), reward, terminal, 0
         
     def render(self, fname):
         self.batch_imgs = np.stack(self.batch_imgs)
         img_width = self.batch_imgs.shape[2]
         
         self.batch_imgs = util.make_grid(self.batch_imgs, len(self.batch_imgs), 2)
-        print(self.uncs)
+        print(self.uncs,'\n')
         tick_labels = [f'{angle:.02f}\n{unc:.04f}\n{label_hat}'
                        for (angle, unc, label_hat) 
                        in zip(self.del_angles, self.uncs, self.label_hats)]
@@ -101,19 +114,18 @@ class Environment(object):
         self.action_size = action_size
         pass
 
-    def render_worker(self, fname):
-        self.env.render(fname)
-        pass
-
-    def new_episode(self, idx):
-        state = self.env.reset(idx)
-        #state = np.reshape(state, [1, self.state_size])
+    def new_episode(self, idx, phase='train'):
+        state = self.env.reset(idx, phase)
         return state
         pass
 
     def act(self, action):
         next_state, reward, terminal, _ = self.env.step(*action)
         return next_state, reward, terminal
+        pass
+
+    def render_worker(self, fname):
+        self.env.render(fname)
         pass
 
 
@@ -249,6 +261,8 @@ class Agent(object):
                          self.replay, self.discount_factor, self.a_bound)
 
         self.save_dir = args.save_dir
+        self.render_dir = args.render_dir
+        self.play_dir = args.play_dir
 
         # initialize
         sess.run(tf.global_variables_initializer())  # tensorflow graph가 다 만들어지고 난 후에 해야됨
@@ -310,7 +324,7 @@ class Agent(object):
                         if (i+1)%10 == 0:
                             print('epoch', e+1, 'iter:', f'{i+1:05d}', ' score:', score, ' last 10 mean score', np.mean(scores[-min(10, len(scores)):]), f'sequence: {self.env.sequence}')
                         if (i+1)%100 == 0:
-                            self.ENV.render_worker(os.path.join(self.save_dir, f'{(i+1):05d}.png'))
+                            self.ENV.render_worker(os.path.join(self.render_dir, f'{(i+1):05d}.png'))
 
         pass
 
@@ -329,19 +343,18 @@ class Agent(object):
                 state = next_state
 #                 time.sleep(0.02)
                 if terminal:
-#                     if idx == 10:
-#                         self.ENV.render_worker(f'{i:05d}.png')
-                    return score
+                    self.ENV.render_worker(os.path.join(self.play_dir, f'{(i+1):04d}.png'))
+                    print(f'{(i+1):04d} image score: {score}')
     pass
 
     def save(self):
-        checkpoint_dir = 'save'
+        checkpoint_dir = os.path.join(self.save_dir, 'ckpt')
         if not os.path.exists(checkpoint_dir):
             os.mkdir(checkpoint_dir)
         self.saver.save(self.sess, os.path.join(checkpoint_dir, 'trained_agent'))
 
     def load(self):
-        checkpoint_dir = 'save'
+        checkpoint_dir = os.path.join(self.save_dir, 'ckpt')
         self.saver.restore(self.sess, os.path.join(checkpoint_dir, 'trained_agent'))
 
 
@@ -350,15 +363,21 @@ if __name__ == "__main__":
     # parameter 저장하는 parser
     parser = argparse.ArgumentParser(description="Pendulum")
     parser.add_argument('--learning_rate', default=[0.002, 0.001], type=list)
-    parser.add_argument('--batch_size', default=32, type=int)
+    parser.add_argument('--batch_size', default=128, type=int)
     parser.add_argument('--discount_factor', default=0.9, type=float)
-    parser.add_argument('--epochs', default=3, type=float)
-    parser.add_argument('--save_dir', default='save_img', type=str)
+    parser.add_argument('--epochs', default=1, type=float)
+    parser.add_argument('--save_dir', default='save', type=str)
+    parser.add_argument('--render_dir', default='render_train', type=str)
+    parser.add_argument('--play_dir', default='render_test', type=str)
     sys.argv = ['-f']
     args = parser.parse_args()
 
-    if not os.path.exists(args.save_dir):
-        os.makedirs(args.save_dir)
+    args.render_dir = os.path.join(args.save_dir, args.render_dir)
+    args.play_dir = os.path.join(args.save_dir, args.play_dir)
+    if not os.path.exists(args.render_dir):
+        os.makedirs(args.render_dir)
+    if not os.path.exists(args.play_dir):
+        os.makedirs(args.play_dir)
 
     config = tf.ConfigProto()
     os.environ["CUDA_VISIBLE_DEVICES"] = '1'
@@ -372,12 +391,5 @@ if __name__ == "__main__":
         agent.train()
         agent.save()
         agent.load()
-        rewards = []
-        for i in range(20):
-            r = agent.play()
-            rewards.append(int(r))
-        mean = np.mean(rewards)
-        print(rewards)
-        print(mean)
 
 
