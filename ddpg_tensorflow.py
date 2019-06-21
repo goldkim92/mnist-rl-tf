@@ -33,8 +33,8 @@ class MnistEnvironment(object):
         
         self.train_images = mnist.train.images.reshape([-1,28,28,1])
         self.train_labels = mnist.train.labels
-        self.test_images = mnist.test.images.reshape([-1,28,28,1])
-        self.test_labels = mnist.test.labels
+        self.test_images = mnist.test.images.reshape([-1,28,28,1])[:200]
+        self.test_labels = mnist.test.labels[:200]
             
     def reset(self, idx, phase='train'):
         self.phase = phase
@@ -74,6 +74,12 @@ class MnistEnvironment(object):
         reward_before = np.clip(-np.log(unc_before), a_min=None, a_max=-np.log(self.threshold))
         reward = reward_after - reward_before
         
+        # save the values
+        self.del_angles.append(rotate_angle)
+        self.uncs.append(unc_after)
+        self.label_hats.append(prob_set.sum(axis=0).argmax(axis=1)[0])
+        self.batch_imgs.append(next_img)
+        
         # terminal
         if self.phase == 'train':
             if (unc_after < self.threshold and self.label_hats[-1] == self.label) \
@@ -87,12 +93,6 @@ class MnistEnvironment(object):
             else:
                 terminal = False
         
-        # save the values
-        self.del_angles.append(rotate_angle)
-        self.uncs.append(unc_after)
-        self.label_hats.append(prob_set.sum(axis=0).argmax(axis=1)[0])
-        self.batch_imgs.append(next_img)
-        
         return next_img.flatten(), reward, terminal, 0
         
     def render(self, fname):
@@ -105,6 +105,9 @@ class MnistEnvironment(object):
                        for (angle, unc, label_hat) 
                        in zip(self.del_angles, self.uncs, self.label_hats)]
         util.save_batch_fig(fname, self.batch_imgs, img_width, tick_labels)
+
+    def compare_accuracy(self):
+        return (self.label_hats[0] == self.label, self.label_hats[-1] == self.label)
 
 
 class Environment(object):
@@ -126,6 +129,10 @@ class Environment(object):
 
     def render_worker(self, fname):
         self.env.render(fname)
+        pass
+
+    def compare_accuracy(self):
+        return self.env.compare_accuracy()
         pass
 
 
@@ -323,12 +330,15 @@ class Agent(object):
                         episodes.append(e)
                         if (i+1)%10 == 0:
                             print('epoch', e+1, 'iter:', f'{i+1:05d}', ' score:', score, ' last 10 mean score', np.mean(scores[-min(10, len(scores)):]), f'sequence: {self.env.sequence}')
-                        if (i+1)%100 == 0:
+                        if (i+1)%500 == 0:
                             self.ENV.render_worker(os.path.join(self.render_dir, f'{(i+1):05d}.png'))
+                        if (i+1)%1000 == 0:
+                            self.save()
 
         pass
 
     def play(self):
+        cor_before_lst, cor_after_lst = [], []
         for idx in range(self.test_size): 
             state = self.ENV.new_episode(idx)
             state = np.reshape(state, [1, self.state_size])
@@ -343,8 +353,14 @@ class Agent(object):
                 state = next_state
 #                 time.sleep(0.02)
                 if terminal:
-                    self.ENV.render_worker(os.path.join(self.play_dir, f'{(i+1):04d}.png'))
-                    print(f'{(i+1):04d} image score: {score}')
+                    (cor_before, cor_after) = self.ENV.compare_accuracy()
+                    cor_before_lst.append(cor_before)
+                    cor_after_lst.append(cor_after)
+
+                    self.ENV.render_worker(os.path.join(self.play_dir, f'{(idx+1):04d}.png'))
+                    print(f'{(idx+1):04d} image score: {score}\n')
+        print('====== NUMBER OF CORRECTION =======')
+        print(f'before: {np.sum(cor_before_lst)}, after: {np.sum(cor_after_lst)}')
     pass
 
     def save(self):
@@ -362,11 +378,12 @@ if __name__ == "__main__":
     print(sys.executable)
     # parameter 저장하는 parser
     parser = argparse.ArgumentParser(description="Pendulum")
+    parser.add_argument('--gpu_number', default='0', type=str)
     parser.add_argument('--learning_rate', default=[0.002, 0.001], type=list)
     parser.add_argument('--batch_size', default=128, type=int)
-    parser.add_argument('--discount_factor', default=0.9, type=float)
+    parser.add_argument('--discount_factor', default=0.99, type=float)
     parser.add_argument('--epochs', default=1, type=float)
-    parser.add_argument('--save_dir', default='save', type=str)
+    parser.add_argument('--save_dir', default='save2', type=str)
     parser.add_argument('--render_dir', default='render_train', type=str)
     parser.add_argument('--play_dir', default='render_test', type=str)
     sys.argv = ['-f']
@@ -380,7 +397,7 @@ if __name__ == "__main__":
         os.makedirs(args.play_dir)
 
     config = tf.ConfigProto()
-    os.environ["CUDA_VISIBLE_DEVICES"] = '1'
+    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_number
     config.log_device_placement = False
     config.gpu_options.allow_growth = True
 
@@ -390,6 +407,6 @@ if __name__ == "__main__":
 
         agent.train()
         agent.save()
-        agent.load()
+#         agent.load()
 
 
