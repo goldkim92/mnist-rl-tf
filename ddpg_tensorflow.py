@@ -297,7 +297,7 @@ class Agent(object):
 
     def noise_select_action(self, state):
         action = self.sess.run(self.ddpg.actor, {self.ddpg.state: state})[0]
-        noise = self.epsilon * self.ou_function(0, 0.15, 0.25)
+        noise = self.epsilon * self.ou_function(0, 0.15, 0.8)
         return action + noise
 
     def select_action(self, state):
@@ -316,7 +316,7 @@ class Agent(object):
                     action = self.noise_select_action(state)
                     next_state, reward, terminal = self.ENV.act(action)
                     state = state[0]
-                    self.replay.add(state, action, reward / 10, next_state, terminal)
+                    self.replay.add(state, action, reward, next_state, terminal)
     
                     if len(self.replay.memory) >= self.batch_size:
                         self.ddpg.update_target_network()
@@ -405,8 +405,9 @@ if __name__ == "__main__":
     with tf.Session(config=config) as sess:
         agent = Agent(args, sess)
 
-        agent.train()
-        agent.save()
-#         agent.load()
+#        agent.train()
+#        agent.save()
+        agent.load()
+        agent.play()
 
 
