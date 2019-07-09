@@ -31,13 +31,16 @@ def random_degrade(img, angle=None, radius=None):
     '''
     img: 28*28*1 with each value ranged in [0,1]
     '''
-    if angle==None and radius==None:
-        angle = np.random.randint(-80,80)
-        radius = np.random.uniform(0.1,0.5)
-    
     img = np2pil(img)
+    
+    if angle==None:
+        angle = np.random.randint(-80,80)
     img = pil_rotate(img, angle)
+
+    if radius==None:
+        radius = np.random.uniform(0.1,0.5)
     img = pil_blur(img, radius)
+    
     img = pil2np(img)
     return img
 

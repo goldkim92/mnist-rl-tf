@@ -7,8 +7,6 @@ import numpy as np
 import argparse
 import tensorflow as tf
 from collections import deque
-from copy import copy
-import sys
 import time
 from tensorflow.examples.tutorials.mnist import input_data
 
@@ -19,12 +17,12 @@ class MnistEnvironment(object):
     def __init__(self, model):
         self.model = model
         self.mc = 10
-        self.threshold = 5e-3
-        self._max_episode_steps = 15
+        self.threshold = 3e-3
+        self._max_episode_steps = 20
         
         self.state_size = 784
         self.action_size = 1
-        self.a_bound = 10
+        self.a_bound = 30
         
         self.data_load()
     
@@ -60,6 +58,7 @@ class MnistEnvironment(object):
     def step(self, rotate_angle):
         # sequence
         self.sequence += 1
+        self.del_angles.append(rotate_angle)
 
         # next_state
         next_img = util.np_rotate(self.img, sum(self.del_angles))
@@ -72,10 +71,9 @@ class MnistEnvironment(object):
 
         reward_after = np.clip(-np.log(unc_after), a_min=None, a_max=-np.log(self.threshold))
         reward_before = np.clip(-np.log(unc_before), a_min=None, a_max=-np.log(self.threshold))
-        reward = reward_after - reward_before
+        reward = reward_after - reward_before -1
         
         # save the values
-        self.del_angles.append(rotate_angle)
         self.uncs.append(unc_after)
         self.label_hats.append(prob_set.sum(axis=0).argmax(axis=1)[0])
         self.batch_imgs.append(next_img)
@@ -316,7 +314,7 @@ class Agent(object):
                     action = self.noise_select_action(state)
                     next_state, reward, terminal = self.ENV.act(action)
                     state = state[0]
-                    self.replay.add(state, action, reward / 10, next_state, terminal)
+                    self.replay.add(state, action, reward, next_state, terminal)
     
                     if len(self.replay.memory) >= self.batch_size:
                         self.ddpg.update_target_network()
@@ -329,7 +327,7 @@ class Agent(object):
                         scores.append(score)
                         episodes.append(e)
                         if (i+1)%10 == 0:
-                            print('epoch', e+1, 'iter:', f'{i+1:05d}', ' score:', score, ' last 10 mean score', np.mean(scores[-min(10, len(scores)):]), f'sequence: {self.env.sequence}')
+                            print('epoch', e+1, 'iter:', f'{i+1:05d}', ' score:', f'{score:.03f}', ' last 10 mean score', f'{np.mean(scores[-min(10, len(scores)):]):.03f}', f'sequence: {self.env.sequence}')
                         if (i+1)%500 == 0:
                             self.ENV.render_worker(os.path.join(self.render_dir, f'{(i+1):05d}.png'))
                         if (i+1)%1000 == 0:
@@ -340,7 +338,7 @@ class Agent(object):
     def play(self):
         cor_before_lst, cor_after_lst = [], []
         for idx in range(self.test_size): 
-            state = self.ENV.new_episode(idx)
+            state = self.ENV.new_episode(idx, phase='test')
             state = np.reshape(state, [1, self.state_size])
     
             terminal = False
@@ -378,17 +376,18 @@ if __name__ == "__main__":
     print(sys.executable)
     # parameter 저장하는 parser
     parser = argparse.ArgumentParser(description="Pendulum")
-    parser.add_argument('--gpu_number', default='1', type=str)
+    parser.add_argument('--gpu_number', default='2', type=str)
     parser.add_argument('--learning_rate', default=[0.002, 0.001], type=list)
     parser.add_argument('--batch_size', default=128, type=int)
-    parser.add_argument('--discount_factor', default=0.99, type=float)
+    parser.add_argument('--discount_factor', default=0.9, type=float)
     parser.add_argument('--epochs', default=1, type=float)
-    parser.add_argument('--save_dir', default='save2', type=str)
+    parser.add_argument('--save_dir', default='discount', type=str)
     parser.add_argument('--render_dir', default='render_train', type=str)
     parser.add_argument('--play_dir', default='render_test', type=str)
     sys.argv = ['-f']
     args = parser.parse_args()
 
+    args.save_dir = os.path.join('save', args.save_dir)
     args.render_dir = os.path.join(args.save_dir, args.render_dir)
     args.play_dir = os.path.join(args.save_dir, args.play_dir)
     if not os.path.exists(args.render_dir):
